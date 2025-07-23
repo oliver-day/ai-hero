@@ -21,6 +21,9 @@ export const ChatPage = ({ userName, isAuthenticated }: ChatProps) => {
   } = useChat();
   const [showSignInModal, setShowSignInModal] = useState(false);
 
+  // Log our messages
+  console.log(messages);
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
