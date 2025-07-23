@@ -2,16 +2,35 @@
 
 import { useChat } from "@ai-sdk/react";
 import { Loader2 } from "lucide-react";
+import { useState } from "react";
 import { ChatMessage } from "~/components/chat-message";
 import { SignInModal } from "~/components/sign-in-modal";
 
 interface ChatProps {
   userName: string;
+  isAuthenticated: boolean;
 }
 
-export const ChatPage = ({ userName }: ChatProps) => {
-  const { messages, input, handleInputChange, handleSubmit, isLoading } =
-    useChat();
+export const ChatPage = ({ userName, isAuthenticated }: ChatProps) => {
+  const {
+    messages,
+    input,
+    handleInputChange,
+    handleSubmit: originalHandleSubmit,
+    isLoading,
+  } = useChat();
+  const [showSignInModal, setShowSignInModal] = useState(false);
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (!isAuthenticated) {
+      setShowSignInModal(true);
+      return;
+    }
+
+    originalHandleSubmit(e);
+  };
 
   return (
     <>
@@ -39,8 +58,13 @@ export const ChatPage = ({ userName }: ChatProps) => {
               <input
                 value={input}
                 onChange={handleInputChange}
-                placeholder="Say something..."
-                autoFocus
+                placeholder={
+                  isAuthenticated
+                    ? "Say something..."
+                    : "Sign in to start chatting..."
+                }
+                autoFocus={isAuthenticated}
+                disabled={isLoading}
                 aria-label="Chat input"
                 className="flex-1 rounded border border-gray-700 bg-gray-800 p-2 text-gray-200 placeholder-gray-400 focus:border-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
               />
@@ -60,7 +84,10 @@ export const ChatPage = ({ userName }: ChatProps) => {
         </div>
       </div>
 
-      <SignInModal isOpen={false} onClose={() => {}} />
+      <SignInModal
+        isOpen={showSignInModal}
+        onClose={() => setShowSignInModal(false)}
+      />
     </>
   );
 };
