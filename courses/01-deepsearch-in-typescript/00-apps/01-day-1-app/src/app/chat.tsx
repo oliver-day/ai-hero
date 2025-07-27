@@ -1,10 +1,11 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertCircle } from "lucide-react";
 import { useState } from "react";
 import { ChatMessage } from "~/components/chat-message";
 import { SignInModal } from "~/components/sign-in-modal";
+import { toast } from "sonner";
 
 interface ChatProps {
   userName: string;
@@ -18,7 +19,25 @@ export const ChatPage = ({ userName, isAuthenticated }: ChatProps) => {
     handleInputChange,
     handleSubmit: originalHandleSubmit,
     isLoading,
-  } = useChat();
+    error,
+  } = useChat({
+    onError: (error) => {
+      // Check if it's a rate limit error by looking at the message
+      if (
+        error.message.includes("429") ||
+        error.message.includes("Rate limit")
+      ) {
+        try {
+          const errorData = JSON.parse(error.message);
+          toast.error(errorData.message || "Rate limit exceeded");
+        } catch {
+          toast.error("Rate limit exceeded. Please try again later.");
+        }
+      } else {
+        toast.error("An error occurred. Please try again.");
+      }
+    },
+  });
   const [showSignInModal, setShowSignInModal] = useState(false);
 
   // Log our messages
