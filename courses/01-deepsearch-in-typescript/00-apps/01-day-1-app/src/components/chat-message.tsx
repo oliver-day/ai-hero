@@ -92,6 +92,43 @@ const ToolInvocation = ({
   );
 };
 
+const Source = ({
+  part,
+}: {
+  part: Extract<MessagePart, { type: "source" }>;
+}) => {
+  const { source } = part;
+
+  return (
+    <div className="bg-gray-750 mb-4 rounded-lg border border-gray-600 p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-sm font-medium text-green-400">Source</span>
+        <span className="rounded bg-green-900 px-2 py-1 text-xs text-green-200">
+          Web Search
+        </span>
+      </div>
+
+      <div className="mb-2">
+        <div className="mb-1 text-xs text-gray-400">URL:</div>
+        <a
+          href={source.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-blue-400 underline"
+        >
+          {source.title || source.url}
+        </a>
+      </div>
+
+      {source.providerMetadata && (
+        <div className="text-xs text-gray-400">
+          Provider: {String(source.providerMetadata.provider)}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const MessagePartRenderer = ({ part }: { part: MessagePart }) => {
   switch (part.type) {
     case "text":
@@ -99,6 +136,9 @@ const MessagePartRenderer = ({ part }: { part: MessagePart }) => {
 
     case "tool-invocation":
       return <ToolInvocation part={part} />;
+
+    case "source":
+      return <Source part={part} />;
 
     default:
       return null;
