@@ -5,10 +5,18 @@ import {
   streamText,
 } from "ai";
 import { z } from "zod";
+import { Langfuse } from "langfuse";
+import { env } from "~/env";
 import { auth } from "../../../server/auth";
 import { model } from "../../../model";
 import { searchSerper } from "../../../serper";
+import { bulkCrawlWebsites } from "../../../scraper";
+import { cacheWithRedis } from "../../../server/redis/redis";
 import { upsertChat, getChat } from "../../../server/db/queries";
+
+const langfuse = new Langfuse({
+  environment: env.NODE_ENV,
+});
 
 export const maxDuration = 60;
 
@@ -34,9 +42,31 @@ export async function POST(request: Request) {
   // Generate a chat ID if none provided
   const finalChatId = chatId ?? crypto.randomUUID();
 
+  // Create Langfuse trace with user and session tracking
+  const trace = langfuse.trace({
+    name: "chat",
+    userId: session.user.id,
+  });
+
   // If chatId is provided, verify it belongs to the current user
   if (chatId) {
+    const verifyChatSpan = trace.span({
+      name: "verify-chat-ownership",
+      input: {
+        userId,
+        chatId,
+      },
+    });
+
     const existingChat = await getChat({ userId, chatId });
+
+    verifyChatSpan.end({
+      output: {
+        chatFound: !!existingChat,
+        chatId,
+      },
+    });
+
     if (!existingChat) {
       return new Response("Chat not found or access denied", { status: 404 });
     }
@@ -48,13 +78,36 @@ export async function POST(request: Request) {
 
   // Create the chat before starting the stream to avoid issues with long-running streams
   if (!chatId) {
+    const createChatSpan = trace.span({
+      name: "create-new-chat",
+      input: {
+        userId,
+        chatId: finalChatId,
+        title,
+        messageCount: messages.length,
+      },
+    });
+
     await upsertChat({
       userId,
       chatId: finalChatId,
       title,
       messages,
     });
+
+    createChatSpan.end({
+      output: {
+        chatId: finalChatId,
+        title,
+        messageCount: messages.length,
+      },
+    });
   }
+
+  // Update trace with sessionId now that we have the final chat ID
+  trace.update({
+    sessionId: finalChatId,
+  });
 
   return createDataStreamResponse({
     execute: async (dataStream) => {
@@ -70,9 +123,42 @@ export async function POST(request: Request) {
         model,
         messages,
         maxSteps: 10,
-        system: `You are a helpful AI assistant that can search the web for current information. 
+        experimental_telemetry: {
+          isEnabled: true,
+          functionId: `agent`,
+          metadata: {
+            langfuseTraceId: trace.id,
+          },
+        },
+        system: `You are a helpful AI assistant that follows a specific workflow to provide accurate, detailed answers.
 
-When users ask questions that might benefit from current information, you should use the searchWeb tool to find relevant and up-to-date information.
+CURRENT DATE AND TIME: ${new Date().toISOString()}
+
+When users ask for "up to date" information, current events, recent news, or anything time-sensitive, make sure to:
+- Use the current date (${new Date().toLocaleDateString()}) as a reference point
+- Prioritize the most recent information available
+- Consider the publication dates of sources when determining what's "current"
+- For time-sensitive queries like weather, sports scores, or breaking news, emphasize the importance of real-time data
+- The search results include publication dates - use these to identify the most current information
+
+WORKFLOW:
+1. Use searchWeb to find relevant URLs that contain information related to the user's question
+2. Use scrapePages to get the full content of 4-6 diverse URLs from different sources
+3. Use the full content to provide detailed, accurate answers with proper citations
+
+When users ask questions that require current or detailed information, follow this workflow:
+- First, search for relevant web pages using searchWeb
+- Then, scrape the full content of 4-6 diverse URLs from different sources using scrapePages
+- Finally, provide comprehensive answers based on the full content you've gathered
+
+IMPORTANT GUIDELINES:
+- Always scrape 4-6 URLs per query to ensure comprehensive coverage
+- Prioritize diverse sources - avoid scraping multiple pages from the same domain
+- Look for authoritative sources, news sites, academic sources, and different perspectives
+- When scraping, select URLs that appear to be from different websites/organizations
+- Pay attention to publication dates when users ask for current information
+
+This approach ensures you have complete information from multiple perspectives rather than just snippets, leading to more accurate and detailed responses.
 
 IMPORTANT: Always format ALL links as Markdown links using the [text](url) format. This includes:
 - Links from web search results
@@ -81,9 +167,9 @@ IMPORTANT: Always format ALL links as Markdown links using the [text](url) forma
 
 Never use plain URLs or HTML links. Always use the Markdown format: [descriptive text](url)
 
-If a user asks about current events, recent developments, or anything that might have changed recently, use the search tool to get the latest information.
+Be conversational and helpful, but always back up your claims with sources when using web search results.
 
-Be conversational and helpful, but always back up your claims with sources when using web search results.`,
+When discussing current events or time-sensitive information, you can reference the current date to provide context about how recent the information is.`,
         tools: {
           searchWeb: {
             parameters: z.object({
@@ -91,7 +177,7 @@ Be conversational and helpful, but always back up your claims with sources when 
             }),
             execute: async ({ query }, { abortSignal }) => {
               const results = await searchSerper(
-                { q: query, num: 10 },
+                { q: query, num: 15 },
                 abortSignal,
               );
 
@@ -99,8 +185,46 @@ Be conversational and helpful, but always back up your claims with sources when 
                 title: result.title,
                 link: result.link,
                 snippet: result.snippet,
+                date: result.date,
               }));
             },
+          },
+          scrapePages: {
+            parameters: z.object({
+              urls: z
+                .array(z.string())
+                .describe(
+                  "Array of URLs to scrape and extract full content from",
+                ),
+            }),
+            execute: cacheWithRedis(
+              "scrapePages",
+              async (
+                { urls }: { urls: string[] },
+                { abortSignal }: { abortSignal?: AbortSignal },
+              ) => {
+                const result = await bulkCrawlWebsites({ urls });
+
+                if (!result.success) {
+                  return {
+                    error: result.error,
+                    results: result.results.map((r) => ({
+                      url: r.url,
+                      success: r.result.success,
+                      data: r.result.success ? r.result.data : r.result.error,
+                    })),
+                  };
+                }
+
+                return {
+                  results: result.results.map((r) => ({
+                    url: r.url,
+                    success: r.result.success,
+                    data: r.result.data,
+                  })),
+                };
+              },
+            ),
           },
         },
         onFinish: async ({ text, finishReason, usage, response }) => {
@@ -112,12 +236,36 @@ Be conversational and helpful, but always back up your claims with sources when 
           });
 
           // Save the complete message history to the database
+          const saveMessagesSpan = trace.span({
+            name: "save-complete-message-history",
+            input: {
+              userId,
+              chatId: finalChatId,
+              title,
+              originalMessageCount: messages.length,
+              responseMessageCount: responseMessages.length,
+              totalMessageCount: updatedMessages.length,
+            },
+          });
+
           await upsertChat({
             userId,
             chatId: finalChatId,
             title,
             messages: updatedMessages,
           });
+
+          saveMessagesSpan.end({
+            output: {
+              chatId: finalChatId,
+              totalMessageCount: updatedMessages.length,
+              finishReason,
+              usage,
+            },
+          });
+
+          // Flush the trace to Langfuse
+          await langfuse.flushAsync();
         },
       });
 
