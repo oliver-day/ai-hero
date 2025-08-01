@@ -4,6 +4,7 @@ import { model } from "./model";
 import { searchSerper } from "./serper";
 import { bulkCrawlWebsites } from "./scraper";
 import { cacheWithRedis } from "./server/redis/redis";
+import { env } from "./env";
 
 export const streamFromDeepSearch = (opts: {
   messages: Message[];
@@ -28,16 +29,16 @@ When users ask for "up to date" information, current events, recent news, or any
 
 WORKFLOW:
 1. Use searchWeb to find relevant URLs that contain information related to the user's question
-2. Use scrapePages to get the full content of 4-6 diverse URLs from different sources
+2. Use scrapePages to get the full content of ${env.SEARCH_RESULTS_COUNT} diverse URLs from different sources
 3. Use the full content to provide detailed, accurate answers with proper citations
 
 When users ask questions that require current or detailed information, follow this workflow:
 - First, search for relevant web pages using searchWeb
-- Then, scrape the full content of 4-6 diverse URLs from different sources using scrapePages
+- Then, scrape the full content of ${env.SEARCH_RESULTS_COUNT} diverse URLs from different sources using scrapePages
 - Finally, provide comprehensive answers based on the full content you've gathered
 
 IMPORTANT GUIDELINES:
-- Always scrape 4-6 URLs per query to ensure comprehensive coverage
+- Always scrape ${env.SEARCH_RESULTS_COUNT} URLs per query to ensure comprehensive coverage
 - Prioritize diverse sources - avoid scraping multiple pages from the same domain
 - Look for authoritative sources, news sites, academic sources, and different perspectives
 - When scraping, select URLs that appear to be from different websites/organizations
@@ -62,7 +63,7 @@ When discussing current events or time-sensitive information, you can reference 
         }),
         execute: async ({ query }, { abortSignal }) => {
           const results = await searchSerper(
-            { q: query, num: 15 },
+            { q: query, num: env.SEARCH_RESULTS_COUNT },
             abortSignal,
           );
 
