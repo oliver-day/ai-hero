@@ -2,7 +2,10 @@ import { bulkCrawlWebsites } from "./scraper";
 import { searchSerper } from "./serper";
 import { SystemContext } from "./system-context";
 import { answerQuestion } from "./answer-question";
-import { getNextAction } from "./get-next-action";
+import { getNextAction, type OurMessageAnnotation } from "./get-next-action";
+import type { StreamTextResult } from "ai";
+import type { Message } from "ai";
+import { streamText } from "ai";
 
 type QueryResultSearchResult = {
   date: string;
@@ -29,7 +32,7 @@ const search = async (
 
   const results: QueryResultSearchResult[] = searchResult.organic.map(
     (result) => ({
-      date: result.date || new Date().toISOString(),
+      date: result.date ?? new Date().toISOString(),
       title: result.title,
       url: result.link,
       snippet: result.snippet,
@@ -65,15 +68,26 @@ const scrapeUrl = async (
 };
 
 export async function runAgentLoop(
-  initialQuestion: string,
-): Promise<StreamTextResult<{}, string>> {
-  const ctx = new SystemContext(initialQuestion);
+  messages: Message[],
+  opts: {
+    writeMessageAnnotation: (annotation: OurMessageAnnotation) => void;
+    langfuseTraceId?: string;
+    onFinish?: Parameters<typeof streamText>[0]["onFinish"];
+  },
+): Promise<StreamTextResult<Record<string, never>, string>> {
+  const ctx = new SystemContext(messages);
 
   // A loop that continues until we have an answer
   // or we've taken 10 actions
   while (!ctx.shouldStop()) {
     // We choose the next action based on the state of our system
-    const nextAction = await getNextAction(ctx);
+    const nextAction = await getNextAction(ctx, opts.langfuseTraceId);
+
+    // Send progress update to the frontend
+    opts.writeMessageAnnotation({
+      type: "NEW_ACTION",
+      action: nextAction,
+    });
 
     // We execute the action and update the state of our system
     if (nextAction.type === "search") {
@@ -87,7 +101,7 @@ export async function runAgentLoop(
       }
       await scrapeUrl(ctx, nextAction.urls);
     } else if (nextAction.type === "answer") {
-      return answerQuestion(ctx);
+      return answerQuestion(ctx, {}, opts.onFinish, opts.langfuseTraceId);
     }
 
     // We increment the step counter
@@ -96,5 +110,10 @@ export async function runAgentLoop(
 
   // If we've taken 10 actions and still don't have an answer,
   // we ask the LLM to give its best attempt at an answer
-  return answerQuestion(ctx, { isFinal: true });
+  return answerQuestion(
+    ctx,
+    { isFinal: true },
+    opts.onFinish,
+    opts.langfuseTraceId,
+  );
 }

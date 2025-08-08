@@ -1,5 +1,6 @@
 import { eq, and, desc, ne } from "drizzle-orm";
 import type { Message } from "ai";
+import type { JSONValue } from "ai";
 
 import { db } from "./index";
 import { chats, messages } from "./schema";
@@ -7,7 +8,7 @@ import { chats, messages } from "./schema";
 export const upsertChat = async (opts: {
   userId: string;
   chatId: string;
-  title: string;
+  title?: string;
   messages: Message[];
 }) => {
   const { userId, chatId, title, messages: chatMessages } = opts;
@@ -20,7 +21,13 @@ export const upsertChat = async (opts: {
     .limit(1);
 
   if (existingChat.length > 0) {
-    // Chat exists, delete all existing messages and replace them
+    // Chat exists, update title if provided and delete all existing messages and replace them
+    if (title !== undefined) {
+      await db
+        .update(chats)
+        .set({ title })
+        .where(and(eq(chats.id, chatId), eq(chats.userId, userId)));
+    }
     await db.delete(messages).where(eq(messages.chatId, chatId));
   } else {
     // Check if chatId is already used by a different user
@@ -37,7 +44,7 @@ export const upsertChat = async (opts: {
     // Create new chat
     await db.insert(chats).values({
       id: chatId,
-      title,
+      title: title ?? "Generating...",
       userId,
     });
   }
@@ -48,6 +55,7 @@ export const upsertChat = async (opts: {
       chatId,
       role: message.role,
       parts: message.parts,
+      annotations: message.annotations,
       order: index,
     }));
 
@@ -82,12 +90,23 @@ export const getChat = async (opts: { userId: string; chatId: string }) => {
     .map((row) => row.message!);
 
   // Convert database messages back to AI SDK Message format
-  const aiMessages: Message[] = dbMessages.map((msg) => ({
-    id: msg.id,
-    role: msg.role as "user" | "assistant" | "system",
-    parts: msg.parts as Message["parts"],
-    content: "",
-  }));
+  const aiMessages: Message[] = dbMessages.map((msg) => {
+    // Extract text content from parts for the content field
+    const parts = msg.parts as Message["parts"];
+    const textContent =
+      parts
+        ?.filter((part) => part.type === "text")
+        .map((part) => (part as { type: "text"; text: string }).text)
+        .join("") || "";
+
+    return {
+      id: msg.id,
+      role: msg.role as "user" | "assistant" | "system",
+      parts,
+      content: textContent,
+      annotations: msg.annotations as JSONValue[],
+    };
+  });
 
   return {
     ...chat,

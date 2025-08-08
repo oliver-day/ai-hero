@@ -1,3 +1,5 @@
+import type { Message } from "ai";
+
 type QueryResultSearchResult = {
   date: string;
   title: string;
@@ -25,9 +27,9 @@ export class SystemContext {
   private step = 0;
 
   /**
-   * The initial question from the user
+   * The full conversation history
    */
-  private initialQuestion: string;
+  private messages: Message[];
 
   /**
    * The history of all queries searched
@@ -39,12 +41,73 @@ export class SystemContext {
    */
   private scrapeHistory: ScrapeResult[] = [];
 
-  constructor(initialQuestion: string) {
-    this.initialQuestion = initialQuestion;
+  constructor(messages: Message[]) {
+    this.messages = messages;
   }
 
   getInitialQuestion(): string {
-    return this.initialQuestion;
+    // Get the last user message as the current question
+    const lastUserMessage = this.messages
+      .filter((msg) => msg.role === "user")
+      .pop();
+
+    if (!lastUserMessage) return "";
+
+    // Extract text content from parts
+    return (
+      lastUserMessage.parts
+        ?.filter((part) => part.type === "text")
+        .map((part) => (part as { type: "text"; text: string }).text)
+        .join("") || ""
+    );
+  }
+
+  getCurrentQuestion(): string {
+    // For follow-up questions, we need to provide more context
+    const lastUserMessage = this.messages
+      .filter((msg) => msg.role === "user")
+      .pop();
+
+    if (!lastUserMessage) return "";
+
+    // Extract text content from parts
+    const extractTextContent = (msg: Message) => {
+      return (
+        msg.parts
+          ?.filter((part) => part.type === "text")
+          .map((part) => (part as { type: "text"; text: string }).text)
+          .join("") || ""
+      );
+    };
+
+    // If this is a follow-up question (like "that's not working"),
+    // we need to include the previous conversation context
+    const userMessages = this.messages.filter((msg) => msg.role === "user");
+
+    if (userMessages.length > 1) {
+      // This is a follow-up question, include previous context
+      const previousUserMessage = userMessages[userMessages.length - 2];
+      if (previousUserMessage) {
+        return `Previous question: ${extractTextContent(previousUserMessage)}\n\nCurrent follow-up: ${extractTextContent(lastUserMessage)}`;
+      }
+    }
+
+    return extractTextContent(lastUserMessage);
+  }
+
+  getConversationHistory(): string {
+    return this.messages
+      .map((msg) => {
+        const role = msg.role === "user" ? "User" : "Assistant";
+        // Extract text content from parts
+        const textContent =
+          msg.parts
+            ?.filter((part) => part.type === "text")
+            .map((part) => (part as { type: "text"; text: string }).text)
+            .join("") || "";
+        return `${role}: ${textContent}`;
+      })
+      .join("\n\n");
   }
 
   shouldStop() {
