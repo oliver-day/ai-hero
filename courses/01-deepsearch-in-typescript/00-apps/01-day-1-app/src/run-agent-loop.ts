@@ -3,68 +3,173 @@ import { searchSerper } from "./serper";
 import { SystemContext } from "./system-context";
 import { answerQuestion } from "./answer-question";
 import { getNextAction, type OurMessageAnnotation } from "./get-next-action";
+import { queryRewriter } from "./query-rewriter";
 import type { StreamTextResult } from "ai";
 import type { Message } from "ai";
 import { streamText } from "ai";
+import { summarizeURL } from "./summarize-url";
 
-type QueryResultSearchResult = {
+type SearchResult = {
   date: string;
   title: string;
   url: string;
   snippet: string;
+  summary: string;
 };
 
-type QueryResult = {
+type SearchHistoryEntry = {
   query: string;
-  results: QueryResultSearchResult[];
-};
-
-type ScrapeResult = {
-  url: string;
-  result: string;
+  results: SearchResult[];
 };
 
 const search = async (
   context: SystemContext,
   query: string,
-): Promise<QueryResult[]> => {
-  const searchResult = await searchSerper({ q: query, num: 10 }, undefined);
+  langfuseTraceId?: string,
+): Promise<SearchHistoryEntry[]> => {
+  // Search for information with fewer results to reduce context window usage
+  const searchResult = await searchSerper({ q: query, num: 5 }, undefined);
 
-  const results: QueryResultSearchResult[] = searchResult.organic.map(
-    (result) => ({
+  // Extract search results and filter out Reddit URLs to avoid robots.txt issues
+  const searchResults = searchResult.organic
+    .filter((result) => !result.link.includes("reddit.com"))
+    .map((result) => ({
       date: result.date ?? new Date().toISOString(),
       title: result.title,
       url: result.link,
       snippet: result.snippet,
-    }),
-  );
+      scrapedContent: "", // Will be populated after scraping
+    }));
 
-  const queryResult: QueryResult = {
-    query,
-    results,
-  };
-
-  context.reportQueries([queryResult]);
-  return [queryResult];
-};
-
-const scrapeUrl = async (
-  context: SystemContext,
-  urls: string[],
-): Promise<ScrapeResult[]> => {
-  const crawlResult = await bulkCrawlWebsites({ urls });
-
-  if (!crawlResult.success) {
-    throw new Error(crawlResult.error);
+  // If no valid URLs remain after filtering, return empty results
+  if (searchResults.length === 0) {
+    console.warn(
+      `No valid URLs found for query: ${query} (all results were Reddit URLs)`,
+    );
+    const searchHistoryEntry: SearchHistoryEntry = {
+      query,
+      results: [],
+    };
+    context.reportSearch(searchHistoryEntry);
+    return [searchHistoryEntry];
   }
 
-  const scrapeResults: ScrapeResult[] = crawlResult.results.map((result) => ({
-    url: result.url,
-    result: result.result.data,
+  // Scrape all URLs to get detailed content
+  const urls = searchResults.map((result) => result.url);
+  const crawlResult = await bulkCrawlWebsites({ urls });
+
+  // Handle failed crawls gracefully
+  if (!crawlResult.success) {
+    console.warn(
+      `Failed to crawl some websites for query: ${query}`,
+      crawlResult.error,
+    );
+
+    // Create results with empty scraped content for failed crawls
+    const combinedResults = searchResults.map((result, index) => ({
+      ...result,
+      scrapedContent: crawlResult.results[index]?.result.success
+        ? crawlResult.results[index]!.result.data
+        : "Failed to scrape content",
+    }));
+
+    // Continue with summarization even if some crawls failed
+    const conversationHistory = context.getConversationHistory();
+    const summaryPromises = combinedResults.map(async (result) => {
+      try {
+        const summary = await summarizeURL({
+          conversationHistory,
+          scrapedContent: result.scrapedContent,
+          searchMetadata: {
+            date: result.date,
+            title: result.title,
+            url: result.url,
+            snippet: result.snippet,
+          },
+          query,
+          langfuseTraceId,
+        });
+        return {
+          date: result.date,
+          title: result.title,
+          url: result.url,
+          snippet: result.snippet,
+          summary,
+        };
+      } catch (error) {
+        console.error(`Failed to summarize ${result.url}:`, error);
+        return {
+          date: result.date,
+          title: result.title,
+          url: result.url,
+          snippet: result.snippet,
+          summary: "Failed to generate summary",
+        };
+      }
+    });
+
+    const summarizedResults = await Promise.all(summaryPromises);
+
+    const searchHistoryEntry: SearchHistoryEntry = {
+      query,
+      results: summarizedResults,
+    };
+
+    context.reportSearch(searchHistoryEntry);
+    return [searchHistoryEntry];
+  }
+
+  // Combine search results with scraped content
+  const combinedResults = searchResults.map((result, index) => ({
+    ...result,
+    scrapedContent:
+      crawlResult.results[index]?.result.data || "Failed to scrape content",
   }));
 
-  context.reportScrapes(scrapeResults);
-  return scrapeResults;
+  // Summarize all URLs in parallel
+  const conversationHistory = context.getConversationHistory();
+  const summaryPromises = combinedResults.map(async (result) => {
+    try {
+      const summary = await summarizeURL({
+        conversationHistory,
+        scrapedContent: result.scrapedContent,
+        searchMetadata: {
+          date: result.date,
+          title: result.title,
+          url: result.url,
+          snippet: result.snippet,
+        },
+        query,
+        langfuseTraceId,
+      });
+      return {
+        date: result.date,
+        title: result.title,
+        url: result.url,
+        snippet: result.snippet,
+        summary,
+      };
+    } catch (error) {
+      console.error(`Failed to summarize ${result.url}:`, error);
+      return {
+        date: result.date,
+        title: result.title,
+        url: result.url,
+        snippet: result.snippet,
+        summary: "Failed to generate summary",
+      };
+    }
+  });
+
+  const summarizedResults = await Promise.all(summaryPromises);
+
+  const searchHistoryEntry: SearchHistoryEntry = {
+    query,
+    results: summarizedResults,
+  };
+
+  context.reportSearch(searchHistoryEntry);
+  return [searchHistoryEntry];
 };
 
 export async function runAgentLoop(
@@ -80,27 +185,39 @@ export async function runAgentLoop(
   // A loop that continues until we have an answer
   // or we've taken 10 actions
   while (!ctx.shouldStop()) {
-    // We choose the next action based on the state of our system
+    // 1. Run the query rewriter to generate search queries
+    const queryPlan = await queryRewriter(ctx, opts.langfuseTraceId);
+
+    // Send planning annotation to frontend
+    opts.writeMessageAnnotation({
+      type: "NEW_ACTION",
+      action: {
+        type: "continue",
+        title: "Planning search strategy",
+        reasoning: `Generated ${queryPlan.queries.length} search queries based on research plan: ${queryPlan.plan}`,
+      },
+    });
+
+    // 2. Search based on the queries
+    const searchPromises = queryPlan.queries.map((query) =>
+      search(ctx, query, opts.langfuseTraceId),
+    );
+
+    await Promise.all(searchPromises);
+
+    // 3. Save to context (this is done automatically in the search function via context.reportSearch)
+
+    // 4. Decide whether to continue by calling getNextAction
     const nextAction = await getNextAction(ctx, opts.langfuseTraceId);
 
-    // Send progress update to the frontend
+    // Send action decision annotation to frontend
     opts.writeMessageAnnotation({
       type: "NEW_ACTION",
       action: nextAction,
     });
 
-    // We execute the action and update the state of our system
-    if (nextAction.type === "search") {
-      if (!nextAction.query) {
-        throw new Error("Search action requires a query");
-      }
-      await search(ctx, nextAction.query);
-    } else if (nextAction.type === "scrape") {
-      if (!nextAction.urls || nextAction.urls.length === 0) {
-        throw new Error("Scrape action requires URLs");
-      }
-      await scrapeUrl(ctx, nextAction.urls);
-    } else if (nextAction.type === "answer") {
+    // If we have an answer, return it
+    if (nextAction.type === "answer") {
       return answerQuestion(ctx, {}, opts.onFinish, opts.langfuseTraceId);
     }
 
