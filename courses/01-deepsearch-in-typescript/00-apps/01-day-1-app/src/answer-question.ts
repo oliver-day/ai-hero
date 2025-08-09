@@ -37,7 +37,7 @@ ${context.getSearchHistory()}
 
 Please provide a comprehensive answer to the user's question based on the information above.`;
 
-  return streamText({
+  const result = streamText({
     model,
     system: systemPrompt,
     prompt,
@@ -52,4 +52,10 @@ Please provide a comprehensive answer to the user's question based on the inform
         }
       : undefined,
   });
+
+  result.usage.then((usage) => {
+    context.reportUsage("answer-question", usage);
+  });
+
+  return result;
 };

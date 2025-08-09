@@ -55,13 +55,15 @@ const SourcesGrid = ({ sources }: { sources: SourceItem[] }) => {
 export const ReasoningSteps = ({
   annotations,
 }: {
-  annotations: OurMessageAnnotation[];
+  annotations: Exclude<OurMessageAnnotation, { type: "TOKEN_USAGE" }>[];
 }) => {
   const [openStep, setOpenStep] = useState<number | null>(null);
 
   if (annotations.length === 0) return null;
 
-  const getIcon = (annotation: OurMessageAnnotation) => {
+  const getIcon = (
+    annotation: Exclude<OurMessageAnnotation, { type: "TOKEN_USAGE" }>,
+  ) => {
     if (annotation.type === "SOURCES") {
       return <Globe className="size-4" />;
     }
@@ -75,14 +77,18 @@ export const ReasoningSteps = ({
     }
   };
 
-  const getTitle = (annotation: OurMessageAnnotation) => {
+  const getTitle = (
+    annotation: Exclude<OurMessageAnnotation, { type: "TOKEN_USAGE" }>,
+  ) => {
     if (annotation.type === "SOURCES") {
       return `Found ${annotation.sources.length} sources`;
     }
     return annotation.action.title;
   };
 
-  const getActionDescription = (annotation: OurMessageAnnotation) => {
+  const getActionDescription = (
+    annotation: Exclude<OurMessageAnnotation, { type: "TOKEN_USAGE" }>,
+  ) => {
     if (annotation.type === "SOURCES") {
       return `Searching and gathering information from ${annotation.sources.length} web sources`;
     }

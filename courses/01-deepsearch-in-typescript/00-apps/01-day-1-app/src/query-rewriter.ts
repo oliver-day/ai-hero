@@ -27,7 +27,7 @@ export const queryRewriter = async (
   context: SystemContext,
   langfuseTraceId?: string,
 ): Promise<QueryPlan> => {
-  const result = await generateObject({
+  const { object, usage } = await generateObject({
     model,
     schema: queryRewriterSchema,
     system: `You are a strategic research planner with expertise in breaking down complex questions into logical search steps. Your primary role is to create a detailed research plan before generating any search queries.
@@ -76,5 +76,7 @@ ${context.getSearchHistory()}`,
       : undefined,
   });
 
-  return result.object;
+  context.reportUsage("query-rewriter", usage);
+
+  return object;
 };

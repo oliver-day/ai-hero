@@ -19,9 +19,32 @@ export const streamFromDeepSearch = async (opts: {
   const ctx = new SystemContext(opts.messages);
   const safetyCheck = await checkIsSafe(ctx);
 
+  // Function to create an onFinish callback that includes token usage
+  const createOnFinishWithUsage = (
+    originalOnFinish?: Parameters<typeof streamText>[0]["onFinish"],
+  ) => {
+    return async (
+      finishParams: Parameters<
+        NonNullable<Parameters<typeof streamText>[0]["onFinish"]>
+      >[0],
+    ) => {
+      // Send token usage annotation
+      const totalUsage = ctx.getTotalTokenUsage();
+      opts.writeMessageAnnotation({
+        type: "TOKEN_USAGE",
+        totalTokens: totalUsage.totalTokens,
+      });
+
+      // Call the original onFinish if provided
+      if (originalOnFinish) {
+        await originalOnFinish(finishParams);
+      }
+    };
+  };
+
   if (safetyCheck.classification === "refuse") {
     // Return a refused message instead of processing the request
-    return streamText({
+    const result = streamText({
       model,
       messages: [
         {
@@ -34,8 +57,14 @@ export const streamFromDeepSearch = async (opts: {
 Reason: ${safetyCheck.reason || "Request violates safety guidelines"}
 
 Please politely explain that you cannot help with this type of request and suggest they ask about something else instead. Be brief and friendly, but firm about not being able to process the original request.`,
-      onFinish: opts.onFinish,
+      onFinish: createOnFinishWithUsage(opts.onFinish),
     });
+
+    result.usage.then((usage) => {
+      ctx.reportUsage("safety-refusal", usage);
+    });
+
+    return result;
   }
 
   // Check if the question needs clarification before proceeding
@@ -48,7 +77,7 @@ Please politely explain that you cannot help with this type of request and sugge
     return requestClarification(
       ctx,
       clarificationResult.reason!,
-      opts.onFinish,
+      createOnFinishWithUsage(opts.onFinish),
       opts.langfuseTraceId,
     );
   }

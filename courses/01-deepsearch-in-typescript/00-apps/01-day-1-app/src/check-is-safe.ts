@@ -11,7 +11,7 @@ export const checkIsSafe = async (
 }> => {
   const messageHistory: string = ctx.getMessageHistory();
 
-  const { object } = await generateObject({
+  const { object, usage } = await generateObject({
     model: guardrailModel,
     schema: z.object({
       classification: z.enum(["allow", "refuse"]),
@@ -131,6 +131,8 @@ Respond with valid JSON in this exact format:
 Remember: When in doubt, err on the side of caution. Your goal is protecting users while maintaining utility for legitimate research and information needs.`,
     prompt: messageHistory,
   });
+
+  ctx.reportUsage("check-is-safe", usage);
 
   return object;
 };

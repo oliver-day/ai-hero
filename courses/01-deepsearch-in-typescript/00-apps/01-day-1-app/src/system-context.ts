@@ -13,6 +13,13 @@ type SearchHistoryEntry = {
   results: SearchResult[];
 };
 
+type TokenUsage = {
+  source: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
 const toSearchResult = (result: SearchResult) =>
   [
     `### ${result.date} - ${result.title}`,
@@ -43,6 +50,11 @@ export class SystemContext {
    * The most recent feedback from the evaluator
    */
   private evaluatorFeedback: string = "";
+
+  /**
+   * The history of all token usage from LLM calls
+   */
+  private usageHistory: TokenUsage[] = [];
 
   constructor(messages: Message[]) {
     this.messages = messages;
@@ -129,7 +141,7 @@ export class SystemContext {
   }
 
   shouldStop() {
-    return this.step >= 7;
+    return this.step >= 5;
   }
 
   incrementStep() {
@@ -166,5 +178,40 @@ export class SystemContext {
 
   getScrapeHistory(): string {
     return this.getSearchHistory();
+  }
+
+  reportUsage(
+    source: string,
+    usage: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+    },
+  ) {
+    this.usageHistory.push({
+      source,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+    });
+  }
+
+  getTotalTokenUsage(): {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  } {
+    return this.usageHistory.reduce(
+      (acc, entry) => ({
+        promptTokens: acc.promptTokens + entry.promptTokens,
+        completionTokens: acc.completionTokens + entry.completionTokens,
+        totalTokens: acc.totalTokens + entry.totalTokens,
+      }),
+      { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    );
+  }
+
+  getUsageHistory(): TokenUsage[] {
+    return [...this.usageHistory];
   }
 }

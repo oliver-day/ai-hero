@@ -11,7 +11,7 @@ export const requestClarification = async (
 ): Promise<StreamTextResult<Record<string, never>, string>> => {
   const messageHistory = ctx.getMessageHistory();
 
-  return streamText({
+  const result = streamText({
     model,
     system: `You are a clarification agent for a DeepSearch system.
 Your job is to ask the user for clarification on their question so that you can provide the most accurate and helpful response.
@@ -37,4 +37,10 @@ Please reply to the user with a clarification request. Be specific about what in
         }
       : undefined,
   });
+
+  result.usage.then((usage) => {
+    ctx.reportUsage("request-clarification", usage);
+  });
+
+  return result;
 };

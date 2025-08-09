@@ -132,6 +132,7 @@ const summarizeAndGroupResults = async (
         },
         query: result.query,
         langfuseTraceId,
+        context,
       });
       return {
         date: result.date,
@@ -196,6 +197,29 @@ export async function runAgentLoop(
   },
 ): Promise<StreamTextResult<Record<string, never>, string>> {
   const ctx = new SystemContext(messages);
+
+  // Function to create an onFinish callback that includes token usage
+  const createOnFinishWithUsage = (
+    originalOnFinish?: Parameters<typeof streamText>[0]["onFinish"],
+  ) => {
+    return async (
+      finishParams: Parameters<
+        NonNullable<Parameters<typeof streamText>[0]["onFinish"]>
+      >[0],
+    ) => {
+      // Send token usage annotation
+      const totalUsage = ctx.getTotalTokenUsage();
+      opts.writeMessageAnnotation({
+        type: "TOKEN_USAGE",
+        totalTokens: totalUsage.totalTokens,
+      });
+
+      // Call the original onFinish if provided
+      if (originalOnFinish) {
+        await originalOnFinish(finishParams);
+      }
+    };
+  };
 
   // A loop that continues until we have an answer
   // or we've taken 10 actions
@@ -269,7 +293,12 @@ export async function runAgentLoop(
 
     // If we have an answer, return it
     if (nextAction.type === "answer") {
-      return answerQuestion(ctx, {}, opts.onFinish, opts.langfuseTraceId);
+      return answerQuestion(
+        ctx,
+        {},
+        createOnFinishWithUsage(opts.onFinish),
+        opts.langfuseTraceId,
+      );
     }
 
     // We increment the step counter
@@ -281,7 +310,7 @@ export async function runAgentLoop(
   return answerQuestion(
     ctx,
     { isFinal: true },
-    opts.onFinish,
+    createOnFinishWithUsage(opts.onFinish),
     opts.langfuseTraceId,
   );
 }

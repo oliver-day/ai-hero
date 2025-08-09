@@ -9,7 +9,7 @@ export const checkIfQuestionNeedsClarification = async (
 ) => {
   const messageHistory: string = ctx.getMessageHistory();
 
-  const { object } = await generateObject({
+  const { object, usage } = await generateObject({
     model: guardrailModel,
     schema: z.object({
       needsClarification: z.boolean(),
@@ -130,6 +130,8 @@ Always respond with valid JSON only. No additional text or explanation.
         }
       : undefined,
   });
+
+  ctx.reportUsage("check-if-question-needs-clarification", usage);
 
   return object;
 };

@@ -39,6 +39,10 @@ export type OurMessageAnnotation =
       type: "SOURCES";
       query: string;
       sources: SourceItem[];
+    }
+  | {
+      type: "TOKEN_USAGE";
+      totalTokens: number;
     };
 
 const actionSchema = z.object({
@@ -66,7 +70,7 @@ export const getNextAction = async (
   context: SystemContext,
   langfuseTraceId?: string,
 ): Promise<Action> => {
-  const result = await generateObject({
+  const { object, usage } = await generateObject({
     model,
     schema: actionSchema,
     system: `You are a research query optimizer. Your task is to analyze search results against the original research goal and either decide to answer the question or to search for more information.
@@ -115,7 +119,9 @@ CURRENT DATE AND TIME: ${new Date().toISOString()}`,
       : undefined,
   });
 
-  const action = result.object;
+  context.reportUsage("get-next-action", usage);
+
+  const action = object;
 
   // Type assertion to ensure proper typing based on action type
   if (action.type === "continue") {
