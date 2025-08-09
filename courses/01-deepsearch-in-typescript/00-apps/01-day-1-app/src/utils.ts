@@ -16,8 +16,8 @@ export function isNewChatCreated(data: unknown): data is {
   );
 }
 
-export const generateChatTitle = async (messages: Message[]) => {
-  const { text } = await generateText({
+export const generateChatTitle = async (messages: Message[], context?: import("./system-context").SystemContext) => {
+  const { text, usage } = await generateText({
     model,
     system: `You are a chat title generator.
 You will be given a chat history, and you will need to generate a title for the chat.
@@ -28,6 +28,10 @@ The title should be in the same language as the chat history.`,
 
 ${messages.map((m) => m.content).join("\n")}`,
   });
+
+  if (context && usage) {
+    context.reportUsage("generate-chat-title", usage);
+  }
 
   return text;
 };

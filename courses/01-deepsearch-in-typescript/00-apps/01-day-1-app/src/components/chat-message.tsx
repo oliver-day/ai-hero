@@ -128,7 +128,11 @@ export const ChatMessage = ({
         </p>
 
         {isAI && annotations && annotations.length > 0 && (
-          <ReasoningSteps annotations={annotations} />
+          <ReasoningSteps
+            annotations={annotations.filter(
+              (annotation) => annotation.type !== "TOKEN_USAGE",
+            )}
+          />
         )}
 
         <div className="prose prose-invert max-w-none">
@@ -136,6 +140,21 @@ export const ChatMessage = ({
             <MessagePartRenderer key={index} part={part} />
           ))}
         </div>
+
+        {isAI && annotations && (
+          <>
+            {annotations
+              .filter((annotation) => annotation.type === "TOKEN_USAGE")
+              .map((annotation, index) => (
+                <div key={index} className="mt-2 text-xs text-gray-500">
+                  Tokens:{" "}
+                  {(
+                    annotation as { totalTokens: number }
+                  ).totalTokens.toLocaleString()}
+                </div>
+              ))}
+          </>
+        )}
       </div>
     </div>
   );

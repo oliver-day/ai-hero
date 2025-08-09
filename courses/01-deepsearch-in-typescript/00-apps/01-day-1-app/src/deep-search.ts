@@ -3,6 +3,11 @@ import type { Message, StreamTextResult } from "ai";
 
 import { runAgentLoop } from "./run-agent-loop";
 import type { OurMessageAnnotation } from "./get-next-action";
+import { checkIsSafe } from "./check-is-safe";
+import { checkIfQuestionNeedsClarification } from "./check-if-question-needs-clarification";
+import { requestClarification } from "./request-clarification";
+import { SystemContext } from "./system-context";
+import { model } from "./model";
 
 export const streamFromDeepSearch = async (opts: {
   messages: Message[];
@@ -10,6 +15,73 @@ export const streamFromDeepSearch = async (opts: {
   langfuseTraceId?: string;
   writeMessageAnnotation: (annotation: OurMessageAnnotation) => void;
 }): Promise<StreamTextResult<Record<string, never>, string>> => {
+  // Check if the request is safe before processing
+  const ctx = new SystemContext(opts.messages);
+  const safetyCheck = await checkIsSafe(ctx);
+
+  // Function to create an onFinish callback that includes token usage
+  const createOnFinishWithUsage = (
+    originalOnFinish?: Parameters<typeof streamText>[0]["onFinish"],
+  ) => {
+    return async (
+      finishParams: Parameters<
+        NonNullable<Parameters<typeof streamText>[0]["onFinish"]>
+      >[0],
+    ) => {
+      // Send token usage annotation
+      const totalUsage = ctx.getTotalTokenUsage();
+      opts.writeMessageAnnotation({
+        type: "TOKEN_USAGE",
+        totalTokens: totalUsage.totalTokens,
+      });
+
+      // Call the original onFinish if provided
+      if (originalOnFinish) {
+        await originalOnFinish(finishParams);
+      }
+    };
+  };
+
+  if (safetyCheck.classification === "refuse") {
+    // Return a refused message instead of processing the request
+    const result = streamText({
+      model,
+      messages: [
+        {
+          role: "user",
+          content: "Request refused for safety reasons",
+        },
+      ],
+      system: `You are a helpful AI assistant. The user's request has been flagged for safety reasons and cannot be processed. 
+
+Reason: ${safetyCheck.reason || "Request violates safety guidelines"}
+
+Please politely explain that you cannot help with this type of request and suggest they ask about something else instead. Be brief and friendly, but firm about not being able to process the original request.`,
+      onFinish: createOnFinishWithUsage(opts.onFinish),
+    });
+
+    result.usage.then((usage) => {
+      ctx.reportUsage("safety-refusal", usage);
+    });
+
+    return result;
+  }
+
+  // Check if the question needs clarification before proceeding
+  const clarificationResult = await checkIfQuestionNeedsClarification(
+    ctx,
+    opts.langfuseTraceId,
+  );
+
+  if (clarificationResult.needsClarification) {
+    return requestClarification(
+      ctx,
+      clarificationResult.reason!,
+      createOnFinishWithUsage(opts.onFinish),
+      opts.langfuseTraceId,
+    );
+  }
+
   // Pass the full message history to provide context for follow-up questions
   return await runAgentLoop(opts.messages, {
     writeMessageAnnotation: opts.writeMessageAnnotation,

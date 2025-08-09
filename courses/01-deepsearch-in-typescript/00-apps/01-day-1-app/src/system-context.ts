@@ -13,6 +13,13 @@ type SearchHistoryEntry = {
   results: SearchResult[];
 };
 
+type TokenUsage = {
+  source: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
 const toSearchResult = (result: SearchResult) =>
   [
     `### ${result.date} - ${result.title}`,
@@ -38,6 +45,16 @@ export class SystemContext {
    * The history of all searches with their scraped content
    */
   private searchHistory: SearchHistoryEntry[] = [];
+
+  /**
+   * The most recent feedback from the evaluator
+   */
+  private evaluatorFeedback: string = "";
+
+  /**
+   * The history of all token usage from LLM calls
+   */
+  private usageHistory: TokenUsage[] = [];
 
   constructor(messages: Message[]) {
     this.messages = messages;
@@ -108,8 +125,23 @@ export class SystemContext {
       .join("\n\n");
   }
 
+  getMessageHistory(): string {
+    return this.messages
+      .map((msg) => {
+        const role = msg.role === "user" ? "User" : "Assistant";
+        // Extract text content from parts
+        const textContent =
+          msg.parts
+            ?.filter((part) => part.type === "text")
+            .map((part) => (part as { type: "text"; text: string }).text)
+            .join("") || "";
+        return `<${role}>${textContent}</${role}>`;
+      })
+      .join("\n");
+  }
+
   shouldStop() {
-    return this.step >= 10;
+    return this.step >= 5;
   }
 
   incrementStep() {
@@ -131,6 +163,14 @@ export class SystemContext {
       .join("\n\n");
   }
 
+  setEvaluatorFeedback(feedback: string) {
+    this.evaluatorFeedback = feedback;
+  }
+
+  getEvaluatorFeedback(): string {
+    return this.evaluatorFeedback;
+  }
+
   // Legacy methods for backward compatibility during transition
   getQueryHistory(): string {
     return this.getSearchHistory();
@@ -138,5 +178,40 @@ export class SystemContext {
 
   getScrapeHistory(): string {
     return this.getSearchHistory();
+  }
+
+  reportUsage(
+    source: string,
+    usage: {
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+    },
+  ) {
+    this.usageHistory.push({
+      source,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
+    });
+  }
+
+  getTotalTokenUsage(): {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  } {
+    return this.usageHistory.reduce(
+      (acc, entry) => ({
+        promptTokens: acc.promptTokens + entry.promptTokens,
+        completionTokens: acc.completionTokens + entry.completionTokens,
+        totalTokens: acc.totalTokens + entry.totalTokens,
+      }),
+      { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    );
+  }
+
+  getUsageHistory(): TokenUsage[] {
+    return [...this.usageHistory];
   }
 }

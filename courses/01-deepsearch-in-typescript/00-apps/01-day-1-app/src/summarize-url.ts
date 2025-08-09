@@ -13,6 +13,7 @@ export interface SummarizeURLOptions {
   };
   query: string;
   langfuseTraceId?: string;
+  context?: import("./system-context").SystemContext;
 }
 
 export const summarizeURL = cacheWithRedis(
@@ -24,6 +25,7 @@ export const summarizeURL = cacheWithRedis(
       searchMetadata,
       query,
       langfuseTraceId,
+      context,
     } = options;
 
     const systemPrompt = `You are a research extraction specialist. Given a research topic and raw web content, create a thoroughly detailed synthesis as a cohesive narrative that flows naturally between key concepts.
@@ -75,6 +77,10 @@ Please create a detailed synthesis of the above content that is relevant to the 
           }
         : undefined,
     });
+
+    if (context && result.usage) {
+      context.reportUsage("summarize-url", result.usage);
+    }
 
     return result.text;
   },
