@@ -4,6 +4,8 @@ import type { Message, StreamTextResult } from "ai";
 import { runAgentLoop } from "./run-agent-loop";
 import type { OurMessageAnnotation } from "./get-next-action";
 import { checkIsSafe } from "./check-is-safe";
+import { checkIfQuestionNeedsClarification } from "./check-if-question-needs-clarification";
+import { requestClarification } from "./request-clarification";
 import { SystemContext } from "./system-context";
 import { model } from "./model";
 
@@ -34,6 +36,21 @@ Reason: ${safetyCheck.reason || "Request violates safety guidelines"}
 Please politely explain that you cannot help with this type of request and suggest they ask about something else instead. Be brief and friendly, but firm about not being able to process the original request.`,
       onFinish: opts.onFinish,
     });
+  }
+
+  // Check if the question needs clarification before proceeding
+  const clarificationResult = await checkIfQuestionNeedsClarification(
+    ctx,
+    opts.langfuseTraceId,
+  );
+
+  if (clarificationResult.needsClarification) {
+    return requestClarification(
+      ctx,
+      clarificationResult.reason!,
+      opts.onFinish,
+      opts.langfuseTraceId,
+    );
   }
 
   // Pass the full message history to provide context for follow-up questions
